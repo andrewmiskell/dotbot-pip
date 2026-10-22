@@ -1,0 +1,4 @@
+# one pipx spec per line: package, then +injections
+pre-commit
+yamllint
+ansible-creator

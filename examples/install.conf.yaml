@@ -1,0 +1,16 @@
+- defaults:
+    pipx:
+      include-apps: true
+
+- pip:
+    - requests
+    - rich>=13
+
+- pipx:
+    - ansible +ansible-lint +sshpass
+    - ruff
+    - poetry --python python3.12 +poetry-plugin-export
+
+- pipx:
+    files:
+      - examples/pipx-tools.txt
