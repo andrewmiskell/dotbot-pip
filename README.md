@@ -42,6 +42,71 @@ Then load it from your `install` script:
 You can also use `--plugin dotbot-pip/dotbot_pip.py`. Don't load this together with
 sobolevn's dotbot-pip: they both define `pip` and `pipx`.
 
+## Migrating from sobolevn/dotbot-pip
+
+This plugin is meant as a drop-in replacement for [sobolevn/dotbot-pip](https://github.com/sobolevn/dotbot-pip),
+but the configuration is different, so update it as well as the submodule.
+
+1. **Remove the old plugin.** Both define `pip` and `pipx`, so only one can be loaded.
+
+   ```shell
+   git submodule deinit -f dotbot-pip
+   git rm -f dotbot-pip
+   rm -rf .git/modules/dotbot-pip
+   ```
+
+2. **Add this plugin** and keep your `install` script's `--plugin-dir dotbot-pip` (see
+   [Installation](#installation)). It uses the same directory name, so the script needs no change.
+
+3. **Update your config.**
+
+   | sobolevn/dotbot-pip                     | This plugin                                             |
+   | --------------------------------------- | ------------------------------------------------------- |
+   | `file: requirements.txt`                | `files: [requirements.txt]`                             |
+   | `binary: /usr/local/bin/pip3` (`pip`)   | `python: /usr/local/bin/python3` (runs `<python> -m pip`) |
+   | `binary: /path/to/pipx` (`pipx`)        | `pipx: /path/to/pipx`                                   |
+   | `user: true`                            | `user: true` (unchanged)                                |
+   | `stderr` defaults to `false`            | `stderr` defaults to `true`                             |
+   | `pipsi:`                                | Not supported: `pipsi` is no longer maintained. Use `pipx`. |
+
+   Before:
+
+   ```yaml
+   - pip:
+       file: requirements.txt
+       binary: /usr/local/bin/pip3
+       user: true
+
+   - pipx:
+       file: requirements-pipx.txt
+   ```
+
+   After:
+
+   ```yaml
+   - pip:
+       files: [requirements.txt]
+       python: /usr/local/bin/python3
+       user: true
+
+   - pipx:
+       files: [requirements-pipx.txt]
+   ```
+
+   The `file` key is not recognised, and is ignored without an error. Rename it to `files`, or
+   the directive will find nothing to install.
+
+4. **Check your requirements files.** The old plugin ran `pip install -r <file>`. This plugin
+   reads each line as its own requirement and installs them one at a time, so a failure doesn't
+   stop the rest. Lines starting with `-` (`-r`, `-e`, `--hash`, ...) are skipped with a warning,
+   so move those into the `pip` list in your config, or expand them into plain requirements.
+   `pipx` files work as before, and can now also use `+` to inject packages.
+
+5. **Optional:** use the new features. `ansible +ansible-lint` injects packages, and
+   `include-apps: true` puts their commands on your `PATH`.
+
+Run `dotbot --dry-run` once to confirm that everything is picked up.
+
 ## Usage
 
 ```yaml
