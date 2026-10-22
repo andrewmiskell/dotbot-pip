@@ -32,7 +32,9 @@ FAKE_PIPX = textwrap.dedent(
     dir=$(dirname "$0")
     echo "$*" >> "$dir/calls.log"
     case "$1" in
-      list) cat "$dir/state.json" 2>/dev/null || echo '{"venvs": {}}' ;;
+      list) cat "$dir/state.json" 2>/dev/null || echo '{"venvs": {}}'
+            [ -f "$dir/list-stderr" ] && cat "$dir/list-stderr" >&2
+            exit $(cat "$dir/list-rc" 2>/dev/null || echo 0) ;;
       install) for a in "$@"; do [ "$a" = broken ] && exit 1; done ;;
       inject) for a in "$@"; do [ "$a" = broken ] && exit 1; done ;;
     esac
@@ -255,7 +257,28 @@ def test_missing_pipx_errors(env):
     (env.bindir / "pipx").unlink()
     r = env.run([{"pipx": ["ruff"]}])
     assert r.returncode != 0
-    assert "is pipx installed" in out(r)
+    assert "pipx` was not found" in out(r)
+
+
+def test_pipx_list_nonzero_with_json_warns_and_continues(env):
+    # pipx exits 1 (but still prints JSON) when an environment's Python is missing
+    env.pipx_installed(ruff=venv("0.8.0"))
+    (env.bindir / "list-rc").write_text("1")
+    r = env.run([{"pipx": ["ruff", "yamllint"]}])
+    assert r.returncode == 0, out(r)
+    assert env.calls() == ["install yamllint"]
+    assert "pipx reinstall-all" in out(r)
+
+
+def test_pipx_list_failure_reports_status_and_stderr(env):
+    (env.bindir / "state.json").write_text("not json")
+    (env.bindir / "list-rc").write_text("2")
+    (env.bindir / "list-stderr").write_text("something exploded\n")
+    r = env.run([{"pipx": ["ruff"]}])
+    assert r.returncode != 0
+    assert env.calls() == []
+    assert "failed with exit status 2: something exploded" in out(r)
+    assert "was not found" not in out(r)
 
 
 def test_bad_data_errors(env):

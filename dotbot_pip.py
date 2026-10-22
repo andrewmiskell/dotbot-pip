@@ -91,6 +91,7 @@ class PythonPackages(dotbot.Plugin):
         }
         self._pip_cache: Optional[Dict[str, str]] = None
         self._pipx_cache: Optional[Dict[str, Dict[str, Any]]] = None
+        self._list_error = ""
 
     def can_handle(self, directive: str) -> bool:
         return directive in self._directives
@@ -163,26 +164,38 @@ class PythonPackages(dotbot.Plugin):
         return " ".join(shlex.quote(t) for t in tokens)
 
     @staticmethod
-    def _query(cmd: List[str]) -> Optional[str]:
+    def _query(cmd: List[str]) -> Optional[Tuple[int, str, str]]:
+        """Run a command and return (exit status, stdout, stderr); None if it can't be run."""
         try:
             result = subprocess.run(  # noqa: S603
                 cmd, capture_output=True, text=True, check=False
             )
         except OSError:
             return None
-        return result.stdout if result.returncode == 0 else None
+        return result.returncode, result.stdout, result.stderr.strip()
+
+    @staticmethod
+    def _failure(cmd: List[str], res: Optional[Tuple[int, str, str]]) -> str:
+        shown = " ".join(cmd)
+        if res is None:
+            return f"Could not run `{shown}`: `{cmd[0]}` was not found (install it, or set its full path in the options)"
+        detail = f": {res[2].splitlines()[-1]}" if res[2] else ""
+        return f"`{shown}` failed with exit status {res[0]}{detail}"
 
     # ---------------------------------------------------------------------- pip
 
     def _pip_installed(self, defaults: Mapping[str, Any]) -> Optional[Dict[str, str]]:
         """Map each installed distribution to its version, from a single `pip list`."""
         if self._pip_cache is None:
-            out = self._query([defaults["python"], "-m", "pip", "list", "--format=json"])
-            if out is None:
+            cmd = [defaults["python"], "-m", "pip", "list", "--format=json"]
+            res = self._query(cmd)
+            if res is None or res[0] != 0:
+                self._list_error = self._failure(cmd, res)
                 return None
             try:
-                self._pip_cache = {normalize(p["name"]): p["version"] for p in json.loads(out)}
+                self._pip_cache = {normalize(p["name"]): p["version"] for p in json.loads(res[1])}
             except (ValueError, KeyError, TypeError):
+                self._list_error = f"Could not read the output of `{' '.join(cmd)}`"
                 return None
         return self._pip_cache
 
@@ -190,7 +203,7 @@ class PythonPackages(dotbot.Plugin):
         installed = self._pip_installed(defaults)
         if installed is None:
             if not self._context.dry_run():
-                self._log.error(f"Could not run `{defaults['python']} -m pip`; is pip installed?")
+                self._log.error(self._list_error)
                 return False
             installed = {}
 
@@ -265,11 +278,13 @@ class PythonPackages(dotbot.Plugin):
         packages (name -> version), from a single `pipx list --json`.
         """
         if self._pipx_cache is None:
-            out = self._query([defaults["pipx"], "list", "--json"])
-            if out is None:
+            cmd = [defaults["pipx"], "list", "--json"]
+            res = self._query(cmd)
+            if res is None:
+                self._list_error = self._failure(cmd, res)
                 return None
             try:
-                venvs = json.loads(out)["venvs"]
+                venvs = json.loads(res[1])["venvs"]
                 self._pipx_cache = {
                     normalize(env): {
                         "version": v["metadata"]["main_package"].get("package_version", ""),
@@ -281,14 +296,24 @@ class PythonPackages(dotbot.Plugin):
                     for env, v in venvs.items()
                 }
             except (ValueError, KeyError, TypeError, AttributeError):
+                self._list_error = (
+                    self._failure(cmd, res) if res[0] != 0 else f"Could not read the output of `{' '.join(cmd)}`"
+                )
                 return None
+            if res[0] != 0:
+                # pipx still prints the environments it can read, but leaves out
+                # (and exits 1 for) any whose Python interpreter has gone missing
+                self._log.warning(
+                    f"`{' '.join(cmd)}` exited with status {res[0]}, so broken environments are treated "
+                    "as not installed. Run `pipx list` to see which, and `pipx reinstall-all` to fix them."
+                )
         return self._pipx_cache
 
     def _pipx(self, specs: List[Any], defaults: Dict[str, Any]) -> bool:
         installed = self._pipx_installed(defaults)
         if installed is None:
             if not self._context.dry_run():
-                self._log.error(f"Could not run `{defaults['pipx']} list`; is pipx installed?")
+                self._log.error(self._list_error)
                 return False
             installed = {}
 
