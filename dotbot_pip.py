@@ -92,6 +92,8 @@ class PythonPackages(dotbot.Plugin):
         self._pip_cache: Optional[Dict[str, str]] = None
         self._pipx_cache: Optional[Dict[str, Dict[str, Any]]] = None
         self._list_error = ""
+        # set when `pipx list` exited non-zero: environments it leaves out may exist but be broken
+        self._list_degraded = False
 
     def can_handle(self, directive: str) -> bool:
         return directive in self._directives
@@ -303,10 +305,12 @@ class PythonPackages(dotbot.Plugin):
             if res[0] != 0:
                 # pipx still prints the environments it can read, but leaves out
                 # (and exits 1 for) any whose Python interpreter has gone missing
-                self._log.warning(
-                    f"`{' '.join(cmd)}` exited with status {res[0]}, so broken environments are treated "
-                    "as not installed. Run `pipx list` to see which, and `pipx reinstall-all` to fix them."
-                )
+                if not self._list_degraded:
+                    self._log.warning(
+                        f"`{' '.join(cmd)}` exited with status {res[0]}, so broken environments are treated "
+                        "as not installed. Run `pipx list` to see which, and `pipx reinstall-all` to fix them."
+                    )
+                self._list_degraded = True
         return self._pipx_cache
 
     def _pipx(self, specs: List[Any], defaults: Dict[str, Any]) -> bool:
@@ -373,6 +377,16 @@ class PythonPackages(dotbot.Plugin):
                     self._pipx_cache = None
                     self._log.warning(f"Failed to install [{spec}]")
                     return False
+                if self._list_degraded and env is not None:
+                    # An environment that `pipx list` can't read still blocks `pipx install`,
+                    # which then exits 0 without doing anything. Don't inject into it.
+                    self._pipx_cache = None
+                    if env not in (self._pipx_installed(defaults) or {}):
+                        self._log.warning(
+                            f"pipx did not install [{package}]: its environment exists but is broken. "
+                            f"Run `pipx reinstall {env}` (or `pipx reinstall-all`) and try again."
+                        )
+                        return False
             have_injected, versions = set(), {}
 
         missing: List[str] = []

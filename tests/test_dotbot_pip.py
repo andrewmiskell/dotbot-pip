@@ -35,7 +35,8 @@ FAKE_PIPX = textwrap.dedent(
       list) cat "$dir/state.json" 2>/dev/null || echo '{"venvs": {}}'
             [ -f "$dir/list-stderr" ] && cat "$dir/list-stderr" >&2
             exit $(cat "$dir/list-rc" 2>/dev/null || echo 0) ;;
-      install) for a in "$@"; do [ "$a" = broken ] && exit 1; done ;;
+      install) for a in "$@"; do [ "$a" = broken ] && exit 1; done
+               [ -f "$dir/install-writes" ] && cp "$dir/install-writes" "$dir/state.json" ;;
       inject) for a in "$@"; do [ "$a" = broken ] && exit 1; done ;;
     esac
     exit 0
@@ -264,10 +265,35 @@ def test_pipx_list_nonzero_with_json_warns_and_continues(env):
     # pipx exits 1 (but still prints JSON) when an environment's Python is missing
     env.pipx_installed(ruff=venv("0.8.0"))
     (env.bindir / "list-rc").write_text("1")
+    (env.bindir / "install-writes").write_text(
+        json.dumps({"venvs": {"ruff": venv("0.8.0"), "yamllint": venv("1.35.0")}})
+    )
     r = env.run([{"pipx": ["ruff", "yamllint"]}])
     assert r.returncode == 0, out(r)
     assert env.calls() == ["install yamllint"]
     assert "pipx reinstall-all" in out(r)
+
+
+def test_pipx_broken_env_install_is_noop_skips_injection(env):
+    # `pipx list` leaves out an env whose Python is missing, and `pipx install`
+    # then exits 0 without doing anything; injecting would crash pipx
+    env.pipx_installed()
+    (env.bindir / "list-rc").write_text("1")
+    r = env.run([{"pipx": ["ansible +ansible-lint", "ruff"]}])
+    assert r.returncode != 0
+    assert env.calls() == ["install ansible", "install ruff"]
+    assert "environment exists but is broken" in out(r)
+    assert "pipx reinstall ansible" in out(r)
+
+
+def test_pipx_degraded_list_still_injects_after_real_install(env):
+    env.pipx_installed()
+    (env.bindir / "list-rc").write_text("1")
+    (env.bindir / "install-writes").write_text(json.dumps({"venvs": {"ansible": venv("11.0.0")}}))
+    r = env.run([{"pipx": ["ansible +ansible-lint"]}])
+    assert r.returncode == 0, out(r)
+    assert env.calls() == ["install ansible", "inject ansible ansible-lint"]
+    assert out(r).count("pipx reinstall-all") == 1  # warned once, not per spec
 
 
 def test_pipx_list_failure_reports_status_and_stderr(env):
